@@ -1,0 +1,22 @@
+{
+  "name": "portrait-current",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "compile-shader": "glslify src/shaders/particle.vert -o src/shaders/particle.compiled.vert",
+    "build": "npm run compile-shader && tsc -b && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "three": "0.98.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.93.31",
+    "glsl-noise": "0.0.0",
+    "glslify": "^7.1.1",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3"
+  }
+}
