@@ -13,6 +13,26 @@ type PreparedImage = {
   source: 'baseline' | 'query' | 'player' | 'default'
 }
 
+type ProductPortrait =
+  | { kind: 'particles'; prepared: PreparedImage }
+  | { kind: 'tiles'; image: DisplayImage; source: 'query' | 'player' }
+
+type DisplayImage = {
+  url: string
+  naturalWidth: number
+  naturalHeight: number
+}
+
+type TilePiece = {
+  element: HTMLSpanElement
+  dx: number
+  dy: number
+  rotation: number
+  cell: number
+  col: number
+  row: number
+}
+
 const params = new URLSearchParams(location.search)
 const baseline = params.get('baseline') === '1'
 const locale = localStorage.getItem('game_locale') === 'en'
@@ -60,6 +80,9 @@ const baselineSamples = [1, 2, 3, 4, 5].map((n) => `./baseline/sample-0${n}.png`
 let baselineIndex = 0
 let particleMesh: THREE.Mesh | null = null
 let hitArea: THREE.Mesh | null = null
+let tileField: HTMLDivElement | null = null
+let tilePieces: TilePiece[] = []
+let tileImage: DisplayImage | null = null
 let imageWidth = 1
 let imageHeight = 1
 let active = false
@@ -84,6 +107,19 @@ function loadImage(url: string, allowCors: boolean) {
     if (allowCors) image.crossOrigin = 'anonymous'
     image.onload = () => resolve(image)
     image.onerror = () => reject(new Error(`Unable to load ${url}`))
+    image.src = new URL(url, document.baseURI).href
+  })
+}
+
+function loadDisplayImage(url: string) {
+  return new Promise<DisplayImage>((resolve, reject) => {
+    const image = new Image()
+    image.onload = () => resolve({
+      url: image.currentSrc || image.src,
+      naturalWidth: image.naturalWidth,
+      naturalHeight: image.naturalHeight,
+    })
+    image.onerror = () => reject(new Error(`Unable to display ${url}`))
     image.src = new URL(url, document.baseURI).href
   })
 }
@@ -117,7 +153,7 @@ function prepareImage(image: HTMLImageElement, source: PreparedImage['source'], 
   return { canvas, pixels, width, height, source }
 }
 
-async function resolveProductImage(): Promise<PreparedImage> {
+async function resolveProductImage(): Promise<ProductPortrait> {
   const queryAvatar = params.get('avatar_url')?.trim()
   let playerAvatar = ''
   if (!queryAvatar && isInAigram && telegramId) {
@@ -126,28 +162,37 @@ async function resolveProductImage(): Promise<PreparedImage> {
         `/note/telegram/user/get/info/by/telegram_id?telegram_id=${telegramId}`,
         'GET',
       )
-      if (profile.retcode === 0) playerAvatar = profile.data?.head_url || ''
+      playerAvatar = profile?.data?.head_url?.trim() || ''
     } catch {
       playerAvatar = ''
     }
   }
 
-  const candidates: Array<{ url: string; source: PreparedImage['source']; allowCors: boolean }> = []
-  if (queryAvatar) candidates.push({ url: queryAvatar, source: 'query', allowCors: true })
-  if (playerAvatar) candidates.push({ url: playerAvatar, source: 'player', allowCors: false })
-  candidates.push({ url: './alteru-default-avatar.jpg', source: 'default', allowCors: false })
-
-  for (const candidate of candidates) {
+  if (queryAvatar) {
     try {
-      const image = await loadImage(candidate.url, candidate.allowCors)
-      const prepared = prepareImage(image, candidate.source)
-      fallbackUsed = candidate.source === 'default' && (Boolean(queryAvatar) || Boolean(playerAvatar))
-      return prepared
+      const image = await loadImage(queryAvatar, true)
+      return { kind: 'particles', prepared: prepareImage(image, 'query') }
     } catch {
-      continue
+      try {
+        return { kind: 'tiles', image: await loadDisplayImage(queryAvatar), source: 'query' }
+      } catch {
+        fallbackUsed = true
+      }
     }
   }
-  throw new Error('No readable portrait source')
+
+  if (playerAvatar) {
+    try {
+      // Platform R2 avatars intentionally omit CORS headers. They can be shown by
+      // the browser but cannot be sampled by Canvas/WebGL without tainting it.
+      return { kind: 'tiles', image: await loadDisplayImage(playerAvatar), source: 'player' }
+    } catch {
+      fallbackUsed = true
+    }
+  }
+
+  const fallback = await loadImage('./alteru-default-avatar.jpg', false)
+  return { kind: 'particles', prepared: prepareImage(fallback, 'default') }
 }
 
 function destroyParticles() {
@@ -163,11 +208,16 @@ function destroyParticles() {
   }
   particleMesh = null
   hitArea = null
+  tileField?.remove()
+  tileField = null
+  tilePieces = []
+  tileImage = null
 }
 
 function initParticles(prepared: PreparedImage) {
   destroyParticles()
   document.body.dataset.avatarSource = prepared.source
+  document.body.dataset.avatarRenderer = 'particles'
   imageWidth = prepared.width
   imageHeight = prepared.height
   const threshold = 34
@@ -238,6 +288,83 @@ function initParticles(prepared: PreparedImage) {
   loading.hidden = true
 }
 
+function seededUnit(index: number, salt: number) {
+  const value = Math.sin(index * 91.173 + salt * 17.719) * 43758.5453
+  return value - Math.floor(value)
+}
+
+function updateTileConvergence() {
+  if (!tilePieces.length) return
+  const completion = Math.min(1, touchedCells.size / 9)
+  tilePieces.forEach((piece) => {
+    const cellAwake = touchedCells.has(piece.cell)
+    const scatter = cellAwake ? 0.08 : 1 - completion * 0.82
+    const scale = cellAwake || completion >= 1 ? 0.98 : 0.86 + (1 - scatter) * 0.1
+    piece.element.style.transform = `translate3d(${piece.dx * scatter}px, ${piece.dy * scatter}px, 0) rotate(${piece.rotation * scatter}deg) scale(${scale})`
+    piece.element.style.opacity = String(cellAwake || completion >= 1 ? 1 : 0.58 + (1 - scatter) * 0.3)
+  })
+}
+
+function updateTileImageLayout() {
+  if (!tileField || !tileImage) return
+  const size = tileField.getBoundingClientRect().width
+  if (!size) return
+  const columns = 24
+  const rows = 24
+  const aspect = tileImage.naturalWidth / Math.max(1, tileImage.naturalHeight)
+  const coverWidth = aspect >= 1 ? size * aspect : size
+  const coverHeight = aspect >= 1 ? size : size / aspect
+  const offsetX = (size - coverWidth) / 2
+  const offsetY = (size - coverHeight) / 2
+  tilePieces.forEach((piece) => {
+    piece.element.style.backgroundSize = `${coverWidth}px ${coverHeight}px`
+    piece.element.style.backgroundPosition = `${offsetX - piece.col * (size / columns)}px ${offsetY - piece.row * (size / rows)}px`
+  })
+}
+
+function initTilePortrait(image: DisplayImage, source: 'query' | 'player') {
+  destroyParticles()
+  document.body.dataset.avatarSource = source
+  document.body.dataset.avatarRenderer = 'tiles'
+  imageWidth = 180
+  imageHeight = 180
+  const columns = 24
+  const rows = 24
+  tileField = document.createElement('div')
+  tileImage = image
+  tileField.className = 'portrait-tiles'
+  tileField.setAttribute('aria-hidden', 'true')
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < columns; col += 1) {
+      const index = row * columns + col
+      const element = document.createElement('span')
+      element.style.left = `${(col / columns) * 100}%`
+      element.style.top = `${(row / rows) * 100}%`
+      element.style.width = `${100 / columns + 0.08}%`
+      element.style.height = `${100 / rows + 0.08}%`
+      element.style.backgroundImage = `url("${image.url.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}")`
+      tileField.append(element)
+      tilePieces.push({
+        element,
+        dx: (seededUnit(index, 1) - 0.5) * 62,
+        dy: (seededUnit(index, 2) - 0.5) * 62,
+        rotation: (seededUnit(index, 3) - 0.5) * 32,
+        cell: Math.min(2, Math.floor(row / (rows / 3))) * 4 + Math.min(3, Math.floor(col / (columns / 4))),
+        col,
+        row,
+      })
+    }
+  }
+  stage.append(tileField)
+  touchedCells.clear()
+  touch.reset()
+  renderCoverage()
+  updateTileImageLayout()
+  updateTileConvergence()
+  loading.hidden = true
+  requestAnimationFrame(handoffFirstFrame)
+}
+
 function resize() {
   camera.aspect = innerWidth / innerHeight
   camera.updateProjectionMatrix()
@@ -249,9 +376,18 @@ function resize() {
     : Math.min((fovHeight * 0.72) / imageHeight, (fovWidth * 0.92) / imageWidth)
   particleMesh?.scale.set(scale, scale, 1)
   hitArea?.scale.set(scale, scale, 1)
+  updateTileImageLayout()
 }
 
 function getUv(event: PointerEvent) {
+  if (tileField) {
+    const rect = tileField.getBoundingClientRect()
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) return null
+    return new THREE.Vector2(
+      (event.clientX - rect.left) / rect.width,
+      1 - (event.clientY - rect.top) / rect.height,
+    )
+  }
   if (!hitArea) return null
   const rect = renderer.domElement.getBoundingClientRect()
   pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1
@@ -263,6 +399,7 @@ function getUv(event: PointerEvent) {
 
 function renderCoverage() {
   coverageMarks.forEach((mark, index) => mark.classList.toggle('is-touched', touchedCells.has(index)))
+  updateTileConvergence()
   if (touchedCells.size >= 9) {
     guide.textContent = copy.done
     restart.hidden = false
@@ -273,6 +410,14 @@ function addInteraction(event: PointerEvent) {
   const uv = getUv(event)
   if (!uv) return
   touch.addTouch(uv)
+  if (tileField) {
+    const pulse = document.createElement('i')
+    pulse.className = 'portrait-touch'
+    pulse.style.left = `${event.clientX}px`
+    pulse.style.top = `${event.clientY}px`
+    stage.append(pulse)
+    pulse.addEventListener('animationend', () => pulse.remove(), { once: true })
+  }
   if (baseline) return
   const col = Math.min(3, Math.floor(uv.x * 4))
   const row = Math.min(2, Math.floor(uv.y * 3))
@@ -343,8 +488,9 @@ async function boot() {
     const image = await loadImage(baselineSamples[0], false)
     initParticles(prepareImage(image, 'baseline', true))
   } else {
-    const prepared = await resolveProductImage()
-    initParticles(prepared)
+    const portrait = await resolveProductImage()
+    if (portrait.kind === 'tiles') initTilePortrait(portrait.image, portrait.source)
+    else initParticles(portrait.prepared)
     if (fallbackUsed) {
       loading.hidden = false
       loading.textContent = copy.error

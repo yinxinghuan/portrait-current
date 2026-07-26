@@ -1,11 +1,27 @@
 import { chromium } from '/Users/yin/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright/index.mjs'
 import { spawn } from 'node:child_process'
-import { mkdir } from 'node:fs/promises'
+import { createServer } from 'node:http'
+import { mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const root = path.resolve(import.meta.dirname, '..')
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const output = path.join(root, '_qa', 'ui')
 await mkdir(output, { recursive: true })
+const noCorsAvatar = await readFile(path.join(root, 'public', 'baseline', 'sample-03.png'))
+const avatarServer = createServer((request, response) => {
+  if (request.url === '/avatar.png') {
+    response.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-store' })
+    response.end(noCorsAvatar)
+    return
+  }
+  response.writeHead(404)
+  response.end()
+})
+await new Promise((resolve, reject) => {
+  avatarServer.once('error', reject)
+  avatarServer.listen(4196, '127.0.0.1', resolve)
+})
 const server = spawn(process.execPath, [
   path.join(root, 'node_modules/vite/bin/vite.js'),
   '--host', '127.0.0.1', '--port', '4195',
@@ -38,7 +54,7 @@ try {
         errors.push(`${viewport.name}: ${message.text()}`)
       }
     })
-    await page.goto('http://127.0.0.1:4195/', { waitUntil: 'networkidle' })
+    await page.goto('http://127.0.0.1:4195/', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => document.body.dataset.avatarSource === 'default')
     await page.waitForTimeout(2200)
     await page.screenshot({ path: path.join(output, `${viewport.name}-default-start.png`) })
@@ -73,9 +89,61 @@ try {
     await page.close()
   }
 
+  for (const viewport of [
+    { width: 390, height: 844, name: '390x844' },
+    { width: 320, height: 568, name: '320x568' },
+  ]) {
+    const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height }, hasTouch: true })
+    page.on('pageerror', (error) => errors.push(`${viewport.name} platform: ${error.message}`))
+    await page.addInitScript(({ avatarUrl }) => {
+      Object.defineProperty(window, 'webkit', {
+        configurable: true,
+        value: {
+          messageHandlers: {
+            aigram: {
+              postMessage(message) {
+                if (typeof message !== 'string' || !message.startsWith('callAPI-')) return
+                const payload = JSON.parse(atob(message.slice('callAPI-'.length)))
+                window.setTimeout(() => {
+                  const callback = window[`__aigram_cb_${payload.request_id.replaceAll('-', '_')}`]
+                  callback?.(JSON.stringify({
+                    request_id: payload.request_id,
+                    success: true,
+                    data: {
+                      retcode: 0,
+                      data: { name: '平台真实用户', head_url: avatarUrl },
+                    },
+                  }))
+                }, 30)
+              },
+            },
+          },
+        },
+      })
+    }, { avatarUrl: 'http://127.0.0.1:4196/avatar.png' })
+    await page.goto('http://127.0.0.1:4195/?api_origin=https%3A%2F%2Faigram.app&telegram_id=739201', { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(() => document.body.dataset.avatarSource === 'player')
+    await page.waitForFunction(() => document.body.dataset.avatarRenderer === 'tiles')
+    await page.waitForTimeout(700)
+    await page.screenshot({ path: path.join(output, `${viewport.name}-platform-player.png`) })
+    const state = await page.evaluate(() => ({
+      source: document.body.dataset.avatarSource,
+      renderer: document.body.dataset.avatarRenderer,
+      tiles: document.querySelectorAll('.portrait-tiles span').length,
+      bootPresent: Boolean(document.querySelector('.boot-bridge')),
+      scrollWidth: document.documentElement.scrollWidth,
+      innerWidth,
+    }))
+    if (state.source !== 'player' || state.renderer !== 'tiles' || state.tiles !== 576 || state.bootPresent) {
+      errors.push(`${viewport.name} platform: invalid identity render ${JSON.stringify(state)}`)
+    }
+    if (state.scrollWidth > state.innerWidth) errors.push(`${viewport.name} platform: horizontal overflow`)
+    await page.close()
+  }
+
   const override = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
   override.on('pageerror', (error) => errors.push(`override: ${error.message}`))
-  await override.goto('http://127.0.0.1:4195/?avatar_url=./baseline/sample-03.png', { waitUntil: 'networkidle' })
+  await override.goto('http://127.0.0.1:4195/?avatar_url=./baseline/sample-03.png', { waitUntil: 'domcontentloaded' })
   await override.waitForFunction(() => document.body.dataset.avatarSource === 'query')
   await override.waitForTimeout(2200)
   await override.screenshot({ path: path.join(output, '390x844-query-avatar.png') })
@@ -83,7 +151,7 @@ try {
 
   const baseline = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
   baseline.on('pageerror', (error) => errors.push(`baseline: ${error.message}`))
-  await baseline.goto('http://127.0.0.1:4195/?baseline=1', { waitUntil: 'networkidle' })
+  await baseline.goto('http://127.0.0.1:4195/?baseline=1', { waitUntil: 'domcontentloaded' })
   await baseline.waitForFunction(() => document.body.dataset.avatarSource === 'baseline')
   await baseline.waitForTimeout(2200)
   await baseline.screenshot({ path: path.join(output, '390x844-baseline.png') })
@@ -102,4 +170,5 @@ try {
   console.log(`QA passed. Screenshots: ${output}`)
 } finally {
   server.kill('SIGTERM')
+  avatarServer.close()
 }
