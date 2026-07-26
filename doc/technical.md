@@ -43,3 +43,6 @@ noise、深度和 64×64 touch texture 计算位置与尺寸。迁移时发现�
 - 改触摸波：编辑 `src/TouchTexture.ts` 的 size、maxAge、radius。
 - 接入新身份源：只修改 `resolveProductImage()`，保持既定回退顺序与失败检测。
 
+## 5. 启动交接
+
+`index.html` 的内联点阵桥先于模块和头像请求绘制。主循环只在 `particleMesh` 已存在且 `renderer.render()` 完成后调度 `handoffFirstFrame()`；该函数设置 `body[data-visual-ready=true]` 并在 320ms 过渡后移除桥。默认、查询头像、平台头像和基线都走同一真实帧门控。

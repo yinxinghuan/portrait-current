@@ -67,6 +67,16 @@ let pointerStartX = 0
 let pointerStartY = 0
 let intro = 0
 let fallbackUsed = false
+let visualReadySent = false
+
+function handoffFirstFrame() {
+  if (visualReadySent) return
+  visualReadySent = true
+  document.body.dataset.visualReady = 'true'
+  const boot = document.querySelector<HTMLElement>('.boot-bridge')
+  boot?.classList.add('is-ready')
+  window.setTimeout(() => boot?.remove(), 420)
+}
 
 function loadImage(url: string, allowCors: boolean) {
   return new Promise<HTMLImageElement>((resolve, reject) => {
@@ -321,6 +331,7 @@ function animate() {
     uniforms.uSize.value += (shownSize - uniforms.uSize.value) * 0.08
   }
   renderer.render(scene, camera)
+  if (particleMesh && !visualReadySent) requestAnimationFrame(handoffFirstFrame)
 }
 
 async function boot() {
