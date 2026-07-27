@@ -77,6 +77,8 @@ const raycaster = new THREE.Raycaster()
 const pointer = new THREE.Vector2()
 const touchedCells = new Set<number>()
 const baselineSamples = [1, 2, 3, 4, 5].map((n) => `./baseline/sample-0${n}.png`)
+const tileColumns = 32
+const tileRows = 32
 let baselineIndex = 0
 let particleMesh: THREE.Mesh | null = null
 let hitArea: THREE.Mesh | null = null
@@ -299,7 +301,7 @@ function updateTileConvergence() {
   tilePieces.forEach((piece) => {
     const cellAwake = touchedCells.has(piece.cell)
     const scatter = cellAwake ? 0.08 : 1 - completion * 0.82
-    const scale = cellAwake || completion >= 1 ? 0.98 : 0.86 + (1 - scatter) * 0.1
+    const scale = cellAwake || completion >= 1 ? 0.9 : 0.62 + (1 - scatter) * 0.2
     piece.element.style.transform = `translate3d(${piece.dx * scatter}px, ${piece.dy * scatter}px, 0) rotate(${piece.rotation * scatter}deg) scale(${scale})`
     piece.element.style.opacity = String(cellAwake || completion >= 1 ? 1 : 0.58 + (1 - scatter) * 0.3)
   })
@@ -309,8 +311,6 @@ function updateTileImageLayout() {
   if (!tileField || !tileImage) return
   const size = tileField.getBoundingClientRect().width
   if (!size) return
-  const columns = 24
-  const rows = 24
   const aspect = tileImage.naturalWidth / Math.max(1, tileImage.naturalHeight)
   const coverWidth = aspect >= 1 ? size * aspect : size
   const coverHeight = aspect >= 1 ? size : size / aspect
@@ -318,7 +318,7 @@ function updateTileImageLayout() {
   const offsetY = (size - coverHeight) / 2
   tilePieces.forEach((piece) => {
     piece.element.style.backgroundSize = `${coverWidth}px ${coverHeight}px`
-    piece.element.style.backgroundPosition = `${offsetX - piece.col * (size / columns)}px ${offsetY - piece.row * (size / rows)}px`
+    piece.element.style.backgroundPosition = `${offsetX - piece.col * (size / tileColumns)}px ${offsetY - piece.row * (size / tileRows)}px`
   })
 }
 
@@ -328,20 +328,18 @@ function initTilePortrait(image: DisplayImage, source: 'query' | 'player') {
   document.body.dataset.avatarRenderer = 'tiles'
   imageWidth = 180
   imageHeight = 180
-  const columns = 24
-  const rows = 24
   tileField = document.createElement('div')
   tileImage = image
   tileField.className = 'portrait-tiles'
   tileField.setAttribute('aria-hidden', 'true')
-  for (let row = 0; row < rows; row += 1) {
-    for (let col = 0; col < columns; col += 1) {
-      const index = row * columns + col
+  for (let row = 0; row < tileRows; row += 1) {
+    for (let col = 0; col < tileColumns; col += 1) {
+      const index = row * tileColumns + col
       const element = document.createElement('span')
-      element.style.left = `${(col / columns) * 100}%`
-      element.style.top = `${(row / rows) * 100}%`
-      element.style.width = `${100 / columns + 0.08}%`
-      element.style.height = `${100 / rows + 0.08}%`
+      element.style.left = `${(col / tileColumns) * 100}%`
+      element.style.top = `${(row / tileRows) * 100}%`
+      element.style.width = `${100 / tileColumns + 0.05}%`
+      element.style.height = `${100 / tileRows + 0.05}%`
       element.style.backgroundImage = `url("${image.url.replaceAll('\\', '\\\\').replaceAll('"', '\\"')}")`
       tileField.append(element)
       tilePieces.push({
@@ -349,7 +347,7 @@ function initTilePortrait(image: DisplayImage, source: 'query' | 'player') {
         dx: (seededUnit(index, 1) - 0.5) * 62,
         dy: (seededUnit(index, 2) - 0.5) * 62,
         rotation: (seededUnit(index, 3) - 0.5) * 32,
-        cell: Math.min(2, Math.floor(row / (rows / 3))) * 4 + Math.min(3, Math.floor(col / (columns / 4))),
+        cell: Math.min(2, Math.floor(row / (tileRows / 3))) * 4 + Math.min(3, Math.floor(col / (tileColumns / 4))),
         col,
         row,
       })

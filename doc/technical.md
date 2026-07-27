@@ -23,8 +23,9 @@
 
 身份解析顺序为 `?avatar_url=` → canonical Aigram 资料接口的 `data.head_url`
 → AlterU 默认头像。资料成功与像素可读性分开判断。平台 R2 头像不设置
-`crossOrigin=anonymous`：浏览器成功显示后，用同一 URL 构建 24×24 DOM
-图像碎片，避免 Canvas 污染后误回退。仅当真实头像 URL 无法加载时才使用
+`crossOrigin=anonymous`：浏览器成功显示后，用同一 URL 构建 32×32 DOM
+圆形图像碎片，再由父层 CSS 应用灰度、高对比和亮度压缩，避免 Canvas 污染
+后误回退，同时让彩色生活照回到原作的单色粒子语法。仅当真实头像 URL 无法加载时才使用
 默认头像。CORS 可读的调试图和本地图按 center-cover 解码到 180×180，
 基线保持 320×180 原尺寸；CPU 复制上游的 Y 翻转暗像素剔除，GPU texture
 保持 Three 默认 flipY。
@@ -37,7 +38,7 @@ noise、深度和 64×64 touch texture 计算位置与尺寸。迁移时发现�
 产品适配使用横纵 FOV 的最小值让正方头像完整进入竖屏；基线仍按原作以高度
 铺满。12 格中触达 9 格后把 `uRandom` 从 2 收束到 0.35、`uDepth` 从 4
 收束到 1.5。平台碎片使用自然尺寸计算 center-cover 背景位置，触达区域即时
-收束，完成时 576 片全部拼合；重复触摸显示电流环。
+收束，完成时 1024 片全部拼合；重复触摸显示电流环。
 
 ## 4. 扩展点
 
@@ -49,4 +50,4 @@ noise、深度和 64×64 touch texture 计算位置与尺寸。迁移时发现�
 
 ## 5. 启动交接
 
-`index.html` 的内联点阵桥先于模块和头像请求绘制。WebGL 路径在 `particleMesh` 已存在且 `renderer.render()` 完成后交接；平台路径在真实头像加载、576 个碎片布局并完成一个动画帧后交接。两者都设置 `body[data-visual-ready=true]`，再移除启动桥。
+`index.html` 的内联点阵桥先于模块和头像请求绘制。WebGL 路径在 `particleMesh` 已存在且 `renderer.render()` 完成后交接；平台路径在真实头像加载、1024 个碎片布局并完成一个动画帧后交接。两者都设置 `body[data-visual-ready=true]`，再移除启动桥。

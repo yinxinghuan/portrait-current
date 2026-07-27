@@ -42,11 +42,13 @@ await new Promise((resolve, reject) => {
 try {
   const browser = await chromium.launch({ headless: true })
   const errors = []
+  const blockGuestShell = (page) => page.route('**/alteru/guest-shell.js', (route) => route.abort())
   for (const viewport of [
     { width: 390, height: 844, name: '390x844' },
     { width: 320, height: 568, name: '320x568' },
   ]) {
     const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height }, hasTouch: true })
+    await blockGuestShell(page)
     page.on('pageerror', (error) => errors.push(`${viewport.name}: ${error.message}`))
     page.on('console', (message) => {
       if (message.type() === 'error' || message.type() === 'warning') console.log(`${viewport.name} console ${message.type()}: ${message.text()}`)
@@ -94,6 +96,7 @@ try {
     { width: 320, height: 568, name: '320x568' },
   ]) {
     const page = await browser.newPage({ viewport: { width: viewport.width, height: viewport.height }, hasTouch: true })
+    await blockGuestShell(page)
     page.on('pageerror', (error) => errors.push(`${viewport.name} platform: ${error.message}`))
     await page.addInitScript(({ avatarUrl }) => {
       Object.defineProperty(window, 'webkit', {
@@ -126,15 +129,38 @@ try {
     await page.waitForFunction(() => document.body.dataset.avatarRenderer === 'tiles')
     await page.waitForTimeout(700)
     await page.screenshot({ path: path.join(output, `${viewport.name}-platform-player.png`) })
+    const portraitRect = await page.locator('.portrait-tiles').boundingBox()
+    if (!portraitRect) {
+      errors.push(`${viewport.name} platform: portrait bounds missing`)
+    } else {
+      await page.mouse.move(portraitRect.x + portraitRect.width * .125, portraitRect.y + portraitRect.height * .17)
+      await page.mouse.down()
+      for (let row = 0; row < 3; row += 1) {
+        const columns = row % 2 === 0 ? [0, 1, 2, 3] : [3, 2, 1, 0]
+        for (const col of columns) {
+          await page.mouse.move(
+            portraitRect.x + portraitRect.width * ((col + .5) / 4),
+            portraitRect.y + portraitRect.height * ((row + .5) / 3),
+            { steps: 6 },
+          )
+        }
+      }
+      await page.mouse.up()
+      await page.waitForTimeout(700)
+      await page.screenshot({ path: path.join(output, `${viewport.name}-platform-complete.png`) })
+    }
     const state = await page.evaluate(() => ({
       source: document.body.dataset.avatarSource,
       renderer: document.body.dataset.avatarRenderer,
       tiles: document.querySelectorAll('.portrait-tiles span').length,
+      filter: getComputedStyle(document.querySelector('.portrait-tiles')).filter,
+      touched: document.querySelectorAll('.coverage i.is-touched').length,
+      restartVisible: !(document.querySelector('.guide button')?.hidden),
       bootPresent: Boolean(document.querySelector('.boot-bridge')),
       scrollWidth: document.documentElement.scrollWidth,
       innerWidth,
     }))
-    if (state.source !== 'player' || state.renderer !== 'tiles' || state.tiles !== 576 || state.bootPresent) {
+    if (state.source !== 'player' || state.renderer !== 'tiles' || state.tiles !== 1024 || !state.filter.includes('grayscale(1)') || state.touched < 9 || !state.restartVisible || state.bootPresent) {
       errors.push(`${viewport.name} platform: invalid identity render ${JSON.stringify(state)}`)
     }
     if (state.scrollWidth > state.innerWidth) errors.push(`${viewport.name} platform: horizontal overflow`)
@@ -142,6 +168,7 @@ try {
   }
 
   const override = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+  await blockGuestShell(override)
   override.on('pageerror', (error) => errors.push(`override: ${error.message}`))
   await override.goto('http://127.0.0.1:4195/?avatar_url=./baseline/sample-03.png', { waitUntil: 'domcontentloaded' })
   await override.waitForFunction(() => document.body.dataset.avatarSource === 'query')
@@ -150,6 +177,7 @@ try {
   await override.close()
 
   const baseline = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true })
+  await blockGuestShell(baseline)
   baseline.on('pageerror', (error) => errors.push(`baseline: ${error.message}`))
   await baseline.goto('http://127.0.0.1:4195/?baseline=1', { waitUntil: 'domcontentloaded' })
   await baseline.waitForFunction(() => document.body.dataset.avatarSource === 'baseline')
