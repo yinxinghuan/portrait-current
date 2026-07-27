@@ -126,10 +126,10 @@ try {
     }, { avatarUrl: 'http://127.0.0.1:4196/avatar.png' })
     await page.goto('http://127.0.0.1:4195/?api_origin=https%3A%2F%2Faigram.app&telegram_id=739201', { waitUntil: 'domcontentloaded' })
     await page.waitForFunction(() => document.body.dataset.avatarSource === 'player')
-    await page.waitForFunction(() => document.body.dataset.avatarRenderer === 'tiles')
+    await page.waitForFunction(() => document.body.dataset.avatarRenderer === 'masked-particles')
     await page.waitForTimeout(700)
     await page.screenshot({ path: path.join(output, `${viewport.name}-platform-player.png`) })
-    const portraitRect = await page.locator('.portrait-tiles').boundingBox()
+    const portraitRect = await page.locator('.portrait-mask').boundingBox()
     if (!portraitRect) {
       errors.push(`${viewport.name} platform: portrait bounds missing`)
     } else {
@@ -152,15 +152,16 @@ try {
     const state = await page.evaluate(() => ({
       source: document.body.dataset.avatarSource,
       renderer: document.body.dataset.avatarRenderer,
-      tiles: document.querySelectorAll('.portrait-tiles span').length,
-      filter: getComputedStyle(document.querySelector('.portrait-tiles')).filter,
+      layers: document.querySelectorAll('.portrait-mask > i').length,
+      filter: getComputedStyle(document.querySelector('.portrait-mask > i')).filter,
+      mask: getComputedStyle(document.querySelector('.portrait-mask > i')).webkitMaskImage,
       touched: document.querySelectorAll('.coverage i.is-touched').length,
       restartVisible: !(document.querySelector('.guide button')?.hidden),
       bootPresent: Boolean(document.querySelector('.boot-bridge')),
       scrollWidth: document.documentElement.scrollWidth,
       innerWidth,
     }))
-    if (state.source !== 'player' || state.renderer !== 'tiles' || state.tiles !== 1024 || !state.filter.includes('grayscale(1)') || state.touched < 9 || !state.restartVisible || state.bootPresent) {
+    if (state.source !== 'player' || state.renderer !== 'masked-particles' || state.layers !== 1 || !state.filter.includes('grayscale(1)') || !state.mask.includes('data:image/png') || state.touched < 9 || !state.restartVisible || state.bootPresent) {
       errors.push(`${viewport.name} platform: invalid identity render ${JSON.stringify(state)}`)
     }
     if (state.scrollWidth > state.innerWidth) errors.push(`${viewport.name} platform: horizontal overflow`)
