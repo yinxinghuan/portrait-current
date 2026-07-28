@@ -129,12 +129,31 @@ try {
     await page.waitForFunction(() => document.body.dataset.avatarRenderer === 'masked-particles')
     await page.waitForTimeout(700)
     await page.screenshot({ path: path.join(output, `${viewport.name}-platform-player.png`) })
-    const portraitRect = await page.locator('.portrait-mask').boundingBox()
+    const portrait = page.locator('.portrait-mask')
+    const idlePortrait = await portrait.screenshot({
+      path: path.join(output, `${viewport.name}-platform-motion-idle.png`),
+    })
+    const portraitRect = await portrait.boundingBox()
     if (!portraitRect) {
       errors.push(`${viewport.name} platform: portrait bounds missing`)
     } else {
-      await page.mouse.move(portraitRect.x + portraitRect.width * .125, portraitRect.y + portraitRect.height * .17)
+      await page.mouse.move(portraitRect.x + portraitRect.width * .42, portraitRect.y + portraitRect.height * .5)
       await page.mouse.down()
+      await page.mouse.move(portraitRect.x + portraitRect.width * .58, portraitRect.y + portraitRect.height * .5, { steps: 2 })
+      await page.waitForTimeout(40)
+      const motionPortrait = await portrait.screenshot({
+        path: path.join(output, `${viewport.name}-platform-motion-peak.png`),
+      })
+      if (Buffer.compare(idlePortrait, motionPortrait) === 0) {
+        errors.push(`${viewport.name} platform: portrait pixels did not move after touch`)
+      }
+      await page.mouse.move(portraitRect.x + portraitRect.width * .62, portraitRect.y + portraitRect.height * .52)
+      const framesBefore = Number(await page.evaluate(() => document.body.dataset.maskedMotionFrames || 0))
+      await page.waitForTimeout(240)
+      const framesAfter = Number(await page.evaluate(() => document.body.dataset.maskedMotionFrames || 0))
+      if (framesAfter - framesBefore < 6) {
+        errors.push(`${viewport.name} platform: masked motion rendered only ${framesAfter - framesBefore} frames in 240ms`)
+      }
       for (let row = 0; row < 3; row += 1) {
         const columns = row % 2 === 0 ? [0, 1, 2, 3] : [3, 2, 1, 0]
         for (const col of columns) {
@@ -146,24 +165,27 @@ try {
         }
       }
       await page.mouse.up()
-      await page.waitForTimeout(700)
+      await page.waitForTimeout(2400)
       await page.screenshot({ path: path.join(output, `${viewport.name}-platform-complete.png`) })
     }
     const state = await page.evaluate(() => ({
       source: document.body.dataset.avatarSource,
       renderer: document.body.dataset.avatarRenderer,
-      layers: document.querySelectorAll('.portrait-mask > i').length,
-      filter: getComputedStyle(document.querySelector('.portrait-mask > i')).filter,
-      mask: getComputedStyle(document.querySelector('.portrait-mask > i')).webkitMaskImage,
+      canvasWidth: document.querySelector('.portrait-mask')?.width,
+      filter: getComputedStyle(document.querySelector('.portrait-mask')).filter,
+      motionFrames: Number(document.body.dataset.maskedMotionFrames || 0),
+      motionPeak: Number(document.body.dataset.maskedMotionPeak || 0),
+      motionCurrent: Number(document.body.dataset.maskedMotionCurrent || 0),
       touched: document.querySelectorAll('.coverage i.is-touched').length,
       restartVisible: !(document.querySelector('.guide button')?.hidden),
       bootPresent: Boolean(document.querySelector('.boot-bridge')),
       scrollWidth: document.documentElement.scrollWidth,
       innerWidth,
     }))
-    if (state.source !== 'player' || state.renderer !== 'masked-particles' || state.layers !== 1 || !state.filter.includes('grayscale(1)') || !state.mask.includes('data:image/png') || state.touched < 9 || !state.restartVisible || state.bootPresent) {
+    if (state.source !== 'player' || state.renderer !== 'masked-particles' || state.canvasWidth !== 720 || !state.filter.includes('grayscale(1)') || state.motionFrames < 2 || state.motionPeak < 10 || state.motionCurrent > state.motionPeak * .5 || state.touched < 9 || !state.restartVisible || state.bootPresent) {
       errors.push(`${viewport.name} platform: invalid identity render ${JSON.stringify(state)}`)
     }
+    console.log(`${viewport.name} platform motion: frames=${state.motionFrames} peak=${state.motionPeak.toFixed(2)} current=${state.motionCurrent.toFixed(2)}`)
     if (state.scrollWidth > state.innerWidth) errors.push(`${viewport.name} platform: horizontal overflow`)
     await page.close()
   }

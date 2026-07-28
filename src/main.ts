@@ -18,9 +18,23 @@ type ProductPortrait =
   | { kind: 'masked-particles'; image: DisplayImage; source: 'query' | 'player' }
 
 type DisplayImage = {
-  url: string
+  element: HTMLImageElement
   naturalWidth: number
   naturalHeight: number
+}
+
+type MaskedDynamics = {
+  source: HTMLCanvasElement
+  context: CanvasRenderingContext2D
+  columns: number
+  rows: number
+  offsetX: Float32Array
+  offsetY: Float32Array
+  velocityX: Float32Array
+  velocityY: Float32Array
+  moving: boolean
+  frames: number
+  peak: number
 }
 
 const params = new URLSearchParams(location.search)
@@ -70,7 +84,8 @@ const baselineSamples = [1, 2, 3, 4, 5].map((n) => `./baseline/sample-0${n}.png`
 let baselineIndex = 0
 let particleMesh: THREE.Mesh | null = null
 let hitArea: THREE.Mesh | null = null
-let maskedField: HTMLDivElement | null = null
+let maskedField: HTMLCanvasElement | null = null
+let maskedDynamics: MaskedDynamics | null = null
 let imageWidth = 1
 let imageHeight = 1
 let active = false
@@ -79,6 +94,7 @@ let pointerStartY = 0
 let intro = 0
 let fallbackUsed = false
 let visualReadySent = false
+let lastPulseAt = 0
 
 function handoffFirstFrame() {
   if (visualReadySent) return
@@ -103,7 +119,7 @@ function loadDisplayImage(url: string) {
   return new Promise<DisplayImage>((resolve, reject) => {
     const image = new Image()
     image.onload = () => resolve({
-      url: image.currentSrc || image.src,
+      element: image,
       naturalWidth: image.naturalWidth,
       naturalHeight: image.naturalHeight,
     })
@@ -198,6 +214,7 @@ function destroyParticles() {
   hitArea = null
   maskedField?.remove()
   maskedField = null
+  maskedDynamics = null
 }
 
 function initParticles(prepared: PreparedImage) {
@@ -285,7 +302,7 @@ function updateMaskedConvergence() {
   maskedField.style.setProperty('--portrait-progress', String(completion))
 }
 
-function createParticleMask() {
+function createParticleMaskCanvas() {
   const size = 180
   const resolution = 4
   const canvas = document.createElement('canvas')
@@ -303,7 +320,123 @@ function createParticleMask() {
       ctx.fill()
     }
   }
-  return `url("${canvas.toDataURL('image/png')}")`
+  return canvas
+}
+
+function renderMaskedPortrait() {
+  if (!maskedField || !maskedDynamics) return
+  const {
+    source,
+    context,
+    columns,
+    rows,
+    offsetX,
+    offsetY,
+  } = maskedDynamics
+  const cellWidth = source.width / columns
+  const cellHeight = source.height / rows
+  context.clearRect(0, 0, maskedField.width, maskedField.height)
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < columns; col += 1) {
+      const index = row * columns + col
+      const sourceX = col * cellWidth
+      const sourceY = row * cellHeight
+      const overlap = 0.75
+      context.drawImage(
+        source,
+        sourceX,
+        sourceY,
+        cellWidth + overlap,
+        cellHeight + overlap,
+        sourceX + offsetX[index],
+        sourceY + offsetY[index],
+        cellWidth + overlap,
+        cellHeight + overlap,
+      )
+    }
+  }
+}
+
+function addMaskedImpulse(uv: THREE.Vector2) {
+  if (!maskedDynamics) return
+  const {
+    source,
+    columns,
+    rows,
+    offsetX,
+    offsetY,
+    velocityX,
+    velocityY,
+  } = maskedDynamics
+  const pointerX = uv.x * source.width
+  const pointerY = (1 - uv.y) * source.height
+  const cellWidth = source.width / columns
+  const cellHeight = source.height / rows
+  const radius = source.width * 0.22
+  for (let row = 0; row < rows; row += 1) {
+    for (let col = 0; col < columns; col += 1) {
+      const index = row * columns + col
+      const centerX = (col + 0.5) * cellWidth + offsetX[index]
+      const centerY = (row + 0.5) * cellHeight + offsetY[index]
+      const deltaX = centerX - pointerX
+      const deltaY = centerY - pointerY
+      const distance = Math.hypot(deltaX, deltaY)
+      if (distance >= radius) continue
+      const falloff = Math.pow(1 - distance / radius, 2)
+      const inverse = distance > 0.5 ? 1 / distance : 0
+      const normalX = distance > 0.5 ? deltaX * inverse : seededUnit(index, 11) - 0.5
+      const normalY = distance > 0.5 ? deltaY * inverse : seededUnit(index, 12) - 0.5
+      velocityX[index] += (normalX * 18 - normalY * 5) * falloff
+      velocityY[index] += (normalY * 18 + normalX * 5) * falloff
+      offsetX[index] += (normalX * 8 - normalY * 2.2) * falloff
+      offsetY[index] += (normalY * 8 + normalX * 2.2) * falloff
+      const speed = Math.hypot(velocityX[index], velocityY[index])
+      if (speed > 38) {
+        velocityX[index] = velocityX[index] / speed * 38
+        velocityY[index] = velocityY[index] / speed * 38
+      }
+    }
+  }
+  maskedDynamics.moving = true
+  renderMaskedPortrait()
+}
+
+function updateMaskedMotion(delta: number) {
+  if (!maskedDynamics || !maskedDynamics.moving) return
+  const {
+    offsetX,
+    offsetY,
+    velocityX,
+    velocityY,
+  } = maskedDynamics
+  const frameScale = Math.min(2, delta * 60)
+  const damping = Math.pow(0.88, frameScale)
+  let maxDisplacement = 0
+  let stillMoving = false
+  for (let index = 0; index < offsetX.length; index += 1) {
+    velocityX[index] -= offsetX[index] * 0.05 * frameScale
+    velocityY[index] -= offsetY[index] * 0.05 * frameScale
+    velocityX[index] *= damping
+    velocityY[index] *= damping
+    offsetX[index] += velocityX[index] * frameScale
+    offsetY[index] += velocityY[index] * frameScale
+    let displacement = Math.hypot(offsetX[index], offsetY[index])
+    const speed = Math.hypot(velocityX[index], velocityY[index])
+    if (displacement > 64) {
+      offsetX[index] = offsetX[index] / displacement * 64
+      offsetY[index] = offsetY[index] / displacement * 64
+      displacement = 64
+    }
+    maxDisplacement = Math.max(maxDisplacement, displacement)
+    if (displacement > 0.08 || speed > 0.08) stillMoving = true
+  }
+  maskedDynamics.frames += 1
+  maskedDynamics.peak = Math.max(maskedDynamics.peak, maxDisplacement)
+  maskedDynamics.moving = stillMoving
+  document.body.dataset.maskedMotionFrames = String(maskedDynamics.frames)
+  document.body.dataset.maskedMotionPeak = maskedDynamics.peak.toFixed(2)
+  document.body.dataset.maskedMotionCurrent = maxDisplacement.toFixed(2)
+  renderMaskedPortrait()
 }
 
 function initMaskedPortrait(image: DisplayImage, source: 'query' | 'player') {
@@ -312,21 +445,55 @@ function initMaskedPortrait(image: DisplayImage, source: 'query' | 'player') {
   document.body.dataset.avatarRenderer = 'masked-particles'
   imageWidth = 180
   imageHeight = 180
-  maskedField = document.createElement('div')
+  const size = 720
+  const sourceCanvas = document.createElement('canvas')
+  sourceCanvas.width = size
+  sourceCanvas.height = size
+  const sourceContext = sourceCanvas.getContext('2d')!
+  const coverScale = Math.max(size / image.naturalWidth, size / image.naturalHeight)
+  const drawWidth = image.naturalWidth * coverScale
+  const drawHeight = image.naturalHeight * coverScale
+  sourceContext.drawImage(
+    image.element,
+    (size - drawWidth) / 2,
+    (size - drawHeight) / 2,
+    drawWidth,
+    drawHeight,
+  )
+  sourceContext.globalCompositeOperation = 'destination-in'
+  sourceContext.drawImage(createParticleMaskCanvas(), 0, 0, size, size)
+  sourceContext.globalCompositeOperation = 'source-over'
+
+  maskedField = document.createElement('canvas')
+  maskedField.width = size
+  maskedField.height = size
   maskedField.className = 'portrait-mask'
   maskedField.setAttribute('aria-hidden', 'true')
-  const particleMask = createParticleMask()
-  const safeUrl = image.url.replaceAll('\\', '\\\\').replaceAll('"', '\\"')
-  const portrait = document.createElement('i')
-  portrait.style.backgroundImage = `url("${safeUrl}")`
-  portrait.style.maskImage = particleMask
-  portrait.style.webkitMaskImage = particleMask
-  maskedField.append(portrait)
+  const columns = 36
+  const rows = 36
+  const count = columns * rows
+  maskedDynamics = {
+    source: sourceCanvas,
+    context: maskedField.getContext('2d')!,
+    columns,
+    rows,
+    offsetX: new Float32Array(count),
+    offsetY: new Float32Array(count),
+    velocityX: new Float32Array(count),
+    velocityY: new Float32Array(count),
+    moving: false,
+    frames: 0,
+    peak: 0,
+  }
+  document.body.dataset.maskedMotionFrames = '0'
+  document.body.dataset.maskedMotionPeak = '0'
+  document.body.dataset.maskedMotionCurrent = '0'
   stage.append(maskedField)
   touchedCells.clear()
   touch.reset()
   renderCoverage()
   updateMaskedConvergence()
+  renderMaskedPortrait()
   loading.hidden = true
   requestAnimationFrame(handoffFirstFrame)
 }
@@ -376,12 +543,16 @@ function addInteraction(event: PointerEvent) {
   if (!uv) return
   touch.addTouch(uv)
   if (maskedField) {
-    const pulse = document.createElement('i')
-    pulse.className = 'portrait-touch'
-    pulse.style.left = `${event.clientX}px`
-    pulse.style.top = `${event.clientY}px`
-    stage.append(pulse)
-    pulse.addEventListener('animationend', () => pulse.remove(), { once: true })
+    addMaskedImpulse(uv)
+    if (event.timeStamp - lastPulseAt > 48) {
+      lastPulseAt = event.timeStamp
+      const pulse = document.createElement('i')
+      pulse.className = 'portrait-touch'
+      pulse.style.left = `${event.clientX}px`
+      pulse.style.top = `${event.clientY}px`
+      stage.append(pulse)
+      pulse.addEventListener('animationend', () => pulse.remove(), { once: true })
+    }
   }
   if (baseline) return
   const col = Math.min(3, Math.floor(uv.x * 4))
@@ -424,6 +595,7 @@ function animate() {
   if (document.hidden) return
   const delta = Math.min(0.05, clock.getDelta())
   touch.update()
+  updateMaskedMotion(delta)
   if (particleMesh) {
     const uniforms = (particleMesh.material as THREE.RawShaderMaterial).uniforms
     uniforms.uTime.value += delta
@@ -440,7 +612,7 @@ function animate() {
     uniforms.uDepth.value += (shownDepth - uniforms.uDepth.value) * 0.08
     uniforms.uSize.value += (shownSize - uniforms.uSize.value) * 0.08
   }
-  renderer.render(scene, camera)
+  if (particleMesh) renderer.render(scene, camera)
   if (particleMesh && !visualReadySent) requestAnimationFrame(handoffFirstFrame)
 }
 
