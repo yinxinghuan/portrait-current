@@ -1,6 +1,6 @@
 import './style.css'
 import * as THREE from 'three'
-import { callAigramAPI, isInAigram, telegramId } from './shared/runtime/bridge'
+import { callAigramAPI, isInAigramNow, getTelegramId } from './shared/runtime/bridge'
 import { TouchTexture } from './TouchTexture'
 import particleVertex from './shaders/particle.compiled.vert?raw'
 import particleFragment from './shaders/particle.frag?raw'
@@ -160,10 +160,10 @@ function prepareImage(image: HTMLImageElement, source: PreparedImage['source'], 
 async function resolveProductImage(): Promise<ProductPortrait> {
   const queryAvatar = params.get('avatar_url')?.trim()
   let playerAvatar = ''
-  if (!queryAvatar && isInAigram && telegramId) {
+  if (!queryAvatar && isInAigramNow() && getTelegramId()!) {
     try {
       const profile = await callAigramAPI<{ retcode: number; data?: { head_url?: string } }>(
-        `/note/telegram/user/get/info/by/telegram_id?telegram_id=${telegramId}`,
+        `/note/telegram/user/get/info/by/telegram_id?telegram_id=${getTelegramId()!}`,
         'GET',
       )
       playerAvatar = profile?.data?.head_url?.trim() || ''
