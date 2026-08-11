@@ -39,8 +39,8 @@ type MaskedDynamics = {
 
 const params = new URLSearchParams(location.search)
 const baseline = params.get('baseline') === '1'
-const locale = localStorage.getItem('game_locale') === 'en'
-  || (!localStorage.getItem('game_locale') && !navigator.language.toLowerCase().startsWith('zh'))
+const locale = alteruLocalStorage.getItem('game_locale') === 'en'
+  || (!alteruLocalStorage.getItem('game_locale') && !navigator.language.toLowerCase().startsWith('zh'))
   ? 'en'
   : 'zh'
 const copy = locale === 'zh'
